@@ -15,9 +15,10 @@ const superUser = userData[4];
 const searchParamValues = require("../fixtures/user/search")();
 
 const config = require("config");
-const { getDiscordMembers, updatedNicknameResponse } = require("../fixtures/discordResponse/discord-response");
+const { getDiscordMembers } = require("../fixtures/discordResponse/discord-response");
 const joinData = require("../fixtures/user/join");
 const {
+  userStatusDataForNewUser,
   userStatusDataAfterSignup,
   userStatusDataAfterFillingJoinSection,
 } = require("../fixtures/userStatus/userStatus");
@@ -359,7 +360,8 @@ describe("Users", function () {
 
   describe("GET /users", function () {
     beforeEach(async function () {
-      await addOrUpdate(userData[0]);
+      const { userId } = await addOrUpdate(userData[0]);
+      await userStatusModel.updateUserStatus(userId, userStatusDataForNewUser);
       await addOrUpdate(userData[1]);
       await addOrUpdate(userData[2]);
       await addOrUpdate(userData[3]);
@@ -656,6 +658,47 @@ describe("Users", function () {
           expect(res).to.have.status(400);
           expect(res.body).to.be.an("object");
           expect(res.body.message).to.equal("Days is required for filterBy unmerged_prs");
+          return done();
+        });
+    });
+
+    it("Should return one user with given discord id and feature flag", async function () {
+      const discordId = userData[0].discordId;
+
+      const res = await chai.request(app).get(`/users?dev=true&discordId=${discordId}`);
+      expect(res).to.have.status(200);
+      expect(res.body).to.be.a("object");
+      expect(res.body.user).to.have.property("state");
+    });
+
+    it("Should throw an error when there is no feature flag", async function () {
+      const discordId = userData[0].discordId;
+      const res = await chai.request(app).get(`/users?discordId=${discordId}`).set("cookie", `${cookieName}=${jwt}`);
+      expect(res).to.have.status(404);
+      expect(res.body).to.be.a("object");
+      expect(res.body.message).to.equal("Route not found");
+    });
+
+    it("Should return an error when passing an invalid Discord ID", async function () {
+      const invalidDiscordId = "50485556209423";
+      const res = await chai.request(app).get(`/users?dev=true&discordId=${invalidDiscordId}`);
+      expect(res).to.have.status(404);
+      expect(res.body).to.be.a("object");
+      expect(res.body.message).to.equal("User doesn't exist");
+    });
+
+    it("Should return user id which have overdue tasks", function (done) {
+      chai
+        .request(app)
+        .get("/users?query=filterBy:overdue_tasks+days:1")
+        .end((err, res) => {
+          if (err) {
+            return done(err);
+          }
+          expect(res).to.have.status(200);
+          expect(res.body).to.be.an("object");
+          expect(res.body.message).to.equal("Users returned successfully!");
+          expect(res.body.users).to.be.a("array");
           return done();
         });
     });
@@ -1951,7 +1994,7 @@ describe("Users", function () {
       fetchStub.returns(
         Promise.resolve({
           status: 200,
-          json: () => Promise.resolve(updatedNicknameResponse),
+          json: () => Promise.resolve(),
         })
       );
       chai
@@ -1963,7 +2006,7 @@ describe("Users", function () {
             return done(err);
           }
           expect(res).to.have.status(200);
-          expect(res.body.message.message).to.be.equal("User nickname changed successfully");
+          expect(res.body.message).to.be.equal("User nickname changed successfully");
           return done();
         });
     });
@@ -1999,6 +2042,45 @@ describe("Users", function () {
           expect(res).to.have.status(500);
           const response = res.body;
           expect(response.message).to.be.equal("An internal server error occurred");
+          return done();
+        });
+    });
+  });
+  describe("PATCH /nickname-synced-field", function () {
+    beforeEach(async function () {
+      fetchStub = Sinon.stub(global, "fetch");
+      await addUser(userData[0]);
+      await addUser(userData[1]);
+      await addUser(userData[2]);
+      await addUser(userData[3]);
+      const superUser = userData[4];
+      userId = await addUser(userData[2]);
+      superUserId = await addUser(superUser);
+      superUserAuthToken = authService.generateAuthToken({ userId: superUserId });
+    });
+    afterEach(async function () {
+      await cleanDb();
+      Sinon.restore();
+    });
+
+    it("returns 200 for successfully adding nickname_synced field to all users with patch method", function (done) {
+      fetchStub.returns(
+        Promise.resolve({
+          status: 200,
+          json: () => Promise.resolve(),
+        })
+      );
+      chai
+        .request(app)
+        .post(`/users/nickname-synced-field`)
+        .set("Cookie", `${cookieName}=${superUserAuthToken}`)
+        .end((err, res) => {
+          if (err) {
+            return done(err);
+          }
+          expect(res).to.have.status(200);
+          const response = res.body;
+          expect(response.message).to.be.equal("Successfully added the nickname_synced field to false for all users");
           return done();
         });
     });

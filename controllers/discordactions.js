@@ -3,6 +3,11 @@ const admin = require("firebase-admin");
 const config = require("config");
 const jwt = require("jsonwebtoken");
 const discordRolesModel = require("../models/discordactions");
+const { setUserDiscordNickname, getDiscordMembers } = require("../services/discordService");
+const { getNonNickNameSyncedUsers } = require("../models/users");
+const { updateNicknameSynced } = require("../services/users");
+const discordDeveloperRoleId = config.get("discordDeveloperRoleId");
+const discordMavenRoleId = config.get("discordMavenRoleId");
 /**
  * Creates a role
  *
@@ -181,6 +186,92 @@ const setRoleIdleToIdleUsers = async (req, res) => {
   }
 };
 
+/**
+ * Patch Update user nicknames on discord server
+ *
+ * @param req {Object} - Express request object
+ * @param res {Object} - Express response object
+ */
+
+const updateDiscordNicknames = async (req, res) => {
+  try {
+    const { dev } = req.query;
+    if (dev !== "true") {
+      return res.status(404).json({
+        message: "Users Nicknames not updated",
+      });
+    }
+
+    const membersInDiscord = await getDiscordMembers();
+    const usersToBeEffected = [];
+    const nickNameToBeSyncedUsers = await getNonNickNameSyncedUsers();
+    await Promise.all(
+      membersInDiscord.map(async (discordUser) => {
+        try {
+          const foundUserWithDiscordId = nickNameToBeSyncedUsers.find((user) => user.discordId === discordUser.user.id);
+          if (foundUserWithDiscordId) {
+            const isDeveloper = discordUser.roles.includes(discordDeveloperRoleId);
+            const isMaven = discordUser.roles.includes(discordMavenRoleId);
+            const isBot = discordUser.user.bot;
+            const isUsernameMatched = discordUser.nick === foundUserWithDiscordId.username.toLowerCase();
+            const isSuperuser = foundUserWithDiscordId.roles.super_user;
+            if (isDeveloper && !isMaven && !isUsernameMatched && !isBot && !isSuperuser) {
+              usersToBeEffected.push({
+                discordId: foundUserWithDiscordId.discordId,
+                username: foundUserWithDiscordId.username,
+                first_name: foundUserWithDiscordId.first_name,
+                id: foundUserWithDiscordId.id,
+              });
+            }
+          }
+        } catch (error) {
+          logger.error(`error getting user with matching discordId ${error.message}`);
+        }
+      })
+    );
+
+    const totalNicknamesUpdated = { count: 0 };
+    const totalNicknamesNotUpdated = { count: 0, errors: [] };
+    const nickNameUpdatedUsers = [];
+    let counter = 0;
+    for (let i = 0; i < usersToBeEffected.length; i++) {
+      const { discordId, username, first_name: firstName } = usersToBeEffected[i];
+      try {
+        if (counter % 10 === 0 && counter !== 0) {
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+        }
+        if (!discordId) {
+          throw new Error("user not verified");
+        } else if (!username) {
+          throw new Error(`does not have a username`);
+        }
+        const response = await setUserDiscordNickname(username.toLowerCase(), discordId);
+        if (response) {
+          const message = await response.message;
+          if (message) {
+            counter++;
+            totalNicknamesUpdated.count++;
+            nickNameUpdatedUsers.push(usersToBeEffected[i].id);
+          }
+        }
+      } catch (error) {
+        totalNicknamesNotUpdated.count++;
+        totalNicknamesNotUpdated.errors.push(`User: ${username ?? firstName}, ${error.message}`);
+        logger.error(`Error in updating discord Nickname: ${error}`);
+      }
+    }
+    await updateNicknameSynced(nickNameUpdatedUsers);
+    return res.json({
+      totalNicknamesUpdated,
+      totalNicknamesNotUpdated,
+      message: `Users Nicknames updated successfully`,
+    });
+  } catch (error) {
+    logger.error(`Error while updating nicknames: ${error}`);
+    return res.boom.badImplementation(INTERNAL_SERVER_ERROR);
+  }
+};
+
 module.exports = {
   getGroupsRoleId,
   createGroupRole,
@@ -188,4 +279,5 @@ module.exports = {
   addGroupRoleToMember,
   updateDiscordImageForVerification,
   setRoleIdleToIdleUsers,
+  updateDiscordNicknames,
 };

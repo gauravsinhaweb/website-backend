@@ -240,7 +240,7 @@ const fetchUsers = async (usernames = []) => {
  * @param { Object }: Object with username and userId, any of the two can be used
  * @return {Promise<{userExists: boolean, user: <userModel>}|{userExists: boolean, user: <userModel>}>}
  */
-const fetchUser = async ({ userId = null, username = null, githubUsername = null }) => {
+const fetchUser = async ({ userId = null, username = null, githubUsername = null, discordId = null }) => {
   try {
     let userData, id;
     if (username) {
@@ -255,6 +255,12 @@ const fetchUser = async ({ userId = null, username = null, githubUsername = null
       userData = user.data();
     } else if (githubUsername) {
       const user = await userModel.where("github_id", "==", githubUsername).limit(1).get();
+      user.forEach((doc) => {
+        id = doc.id;
+        userData = doc.data();
+      });
+    } else if (discordId) {
+      const user = await userModel.where("discordId", "==", discordId).limit(1).get();
       user.forEach((doc) => {
         id = doc.id;
         userData = doc.data();
@@ -829,6 +835,29 @@ const fetchUsersListForMultipleValues = async (documentKey, valueList) => {
   }
 };
 
+const getNonNickNameSyncedUsers = async () => {
+  try {
+    const usersRef = await userModel
+      .where("roles.archived", "==", false)
+      .where("nickname_synced", "==", false)
+      .where("discordId", "!=", null)
+      .get();
+    const users = [];
+    usersRef.forEach((user) => {
+      const userData = user.data();
+      if (userData?.discordId)
+        users.push({
+          id: user.id,
+          ...userData,
+        });
+    });
+    return users;
+  } catch (err) {
+    logger.error(`Error while fetching all users: ${err}`);
+    throw err;
+  }
+};
+
 module.exports = {
   addOrUpdate,
   fetchPaginatedUsers,
@@ -857,4 +886,5 @@ module.exports = {
   updateUsersInBatch,
   fetchUsersListForMultipleValues,
   fetchUserForKeyValue,
+  getNonNickNameSyncedUsers,
 };
